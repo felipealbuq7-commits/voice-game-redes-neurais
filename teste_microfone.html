@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Microfone</title>
+</head>
+<body>
+    <h1>Teste de Microfone</h1>
+    <button id="iniciar">Ativar microfone</button>
+    <p id="status">Aguardando autorização...</p>
+    <p id="volume">Volume: 0</p>
+
+    <script>
+        const botao = document.getElementById("iniciar");
+        const status = document.getElementById("status");
+        const volume = document.getElementById("volume");
+
+        botao.addEventListener("click", async () => {
+            try {
+                status.textContent = "Solicitando acesso...";
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: true
+                });
+
+                const contexto = new AudioContext();
+                await contexto.resume();
+
+                const fonte = contexto.createMediaStreamSource(stream);
+                const analisador = contexto.createAnalyser();
+                analisador.fftSize = 2048;
+                fonte.connect(analisador);
+
+                const dados = new Uint8Array(analisador.fftSize);
+                status.textContent = "Microfone ativo! Fale alguma coisa.";
+
+                function medirVolume() {
+                    analisador.getByteTimeDomainData(dados);
+                    let soma = 0;
+                    for (const valor of dados) {
+                        const amostra = (valor - 128) / 128;
+                        soma += amostra * amostra;
+                    }
+                    const rms = Math.sqrt(soma / dados.length);
+                    volume.textContent = "Volume: " + rms.toFixed(4);
+                    requestAnimationFrame(medirVolume);
+                }
+
+                medirVolume();
+            } catch (erro) {
+                status.textContent = "Erro: " + erro.name + " - " + erro.message;
+                console.error(erro);
+            }
+        });
+    </script>
+</body>
+</html>

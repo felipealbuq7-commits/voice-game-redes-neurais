@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Game – Reconhecimento de Voz</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #fff;
+      overflow: hidden;
+    }
+
+    #titulo {
+      font-size: 22px;
+      font-weight: bold;
+      color: #e94560;
+      letter-spacing: 4px;
+      margin-bottom: 10px;
+      text-shadow: 0 0 20px #e9456088;
+    }
+
+    #game-wrapper {
+      position: relative;
+    }
+
+    #canvas {
+      display: block;
+      border: 2px solid #e9456044;
+      border-radius: 8px;
+      box-shadow: 0 0 40px #e9456033;
+    }
+
+    #hud-top {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      pointer-events: none;
+      width: 100%;
+    }
+
+    #cmd-display {
+      background: #00000099;
+      border: 1px solid #e9456066;
+      border-radius: 20px;
+      padding: 6px 20px;
+      font-size: 16px;
+      font-weight: bold;
+      color: #e94560;
+      letter-spacing: 2px;
+      min-width: 200px;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    #mic-status {
+      font-size: 12px;
+      color: #aaa;
+      background: #00000088;
+      padding: 3px 12px;
+      border-radius: 10px;
+    }
+
+    #historico {
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      background: #00000088;
+      border: 1px solid #ffffff22;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #aaa;
+      min-width: 160px;
+      pointer-events: none;
+    }
+
+    #historico h4 {
+      color: #e94560;
+      margin-bottom: 6px;
+      font-size: 11px;
+      letter-spacing: 1px;
+    }
+
+    #hist-lista { list-style: none; }
+    #hist-lista li { padding: 2px 0; border-bottom: 1px solid #ffffff11; }
+
+    #comandos-ref {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #555;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="titulo">🎮 VOICE GAME 🎮</div>
+
+<div id="game-wrapper">
+  <canvas id="canvas" width="900" height="420"></canvas>
+
+  <div id="hud-top">
+    <div id="cmd-display">🎤 Aguardando...</div>
+    <div id="mic-status">Microfone: inicializando...</div>
+  </div>
+
+  <div id="historico">
+    <h4>HISTÓRICO</h4>
+    <ul id="hist-lista"></ul>
+  </div>
+</div>
+
+<div id="comandos-ref">
+  COMANDOS: pular | atacar | correr | parar | agachar | direita | esquerda
+</div>
+
+<div id="debug-painel" style="margin-top:8px; background:#00000088; border:1px solid #ffffff22; border-radius:8px; padding:8px 16px; font-size:12px; color:#aaa; text-align:center;">
+  🎙️ Última fala ouvida: <span id="debug-texto" style="color:#ffe066;">—</span>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <button id="btn-mic" onclick="tentarIniciarMic()" style="background:#e94560; color:#fff; border:none; border-radius:6px; padding:4px 12px; cursor:pointer; font-family:'Courier New'; font-size:12px;">🎤 Ativar Microfone</button>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  CONSTANTES E CONFIG
+// ════════════════════════════════════════════════════════
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const W       = canvas.width;
+const H       = canvas.height;
+const CHAO_Y  = H - 80;
+
+// ════════════════════════════════════════════════════════
+//  CÂMERA
+// ════════════════════════════════════════════════════════
+const cam = { x: 0 };
+
+// ════════════════════════════════════════════════════════
+//  PARTÍCULAS
+// ════════════════════════════════════════════════════════
+const particulas = [];
+
+function criarParticulas(x, y, cor, qtd = 8) {
+  for (let i = 0; i < qtd; i++) {
+    particulas.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: -(Math.random() * 4 + 1),
+      vida: 1,
+      cor,
+      r: Math.random() * 4 + 2
+    });
+  }
+}
+
+function atualizarParticulas() {
+  for (let i = particulas.length - 1; i >= 0; i--) {
+    const p = particulas[i];
+    p.x  += p.vx;
+    p.y  += p.vy;
+    p.vy += 0.15;
+    p.vida -= 0.03;
+    if (p.vida <= 0) particulas.splice(i, 1);
+  }
+}
+
+function desenharParticulas() {
+  particulas.forEach(p => {
+    ctx.save();
+    ctx.globalAlpha = p.vida;
+    ctx.fillStyle = p.cor;
+    ctx.beginPath();
+    ctx.arc(p.x - cam.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  JOGADOR
+// ════════════════════════════════════════════════════════
+const jogador = {
+  x: 300, y: CHAO_Y,
+  w: 36, h: 56,
+  vy: 0,
+  noChao: true,
+  direcao: 1,        // 1 = direita, -1 = esquerda
+  estado: 'idle',
+  estadoTimer: 0,
+  hp: 100,
+  maxHp: 100,
+  atacando: false,
+  ataqueTimer: 0,
+  frame: 0,
+  frameTimer: 0,
+  invencivel: false,
+  invecivelTimer: 0,
+  correr: false,
+};
+
+const GRAVIDADE    = 0.55;
+const FORCA_PULO   = -13;
+const VEL_CORRER   = 4;
+const VEL_ANDAR    = 2;
+
+function atualizarJogador() {
+  // Gravidade
+  if (!jogador.noChao) {
+    jogador.vy += GRAVIDADE;
+    jogador.y  += jogador.vy;
+    if (jogador.y >= CHAO_Y) {
+      jogador.y    = CHAO_Y;
+      jogador.vy   = 0;
+      jogador.noChao = true;
+      if (jogador.estado === 'pular') setEstado('idle');
+    }
+  }
+
+  // Ataque
+  if (jogador.atacando) {
+    jogador.ataqueTimer--;
+    if (jogador.ataqueTimer <= 0) {
+      jogador.atacando = false;
+      if (jogador.estado === 'atacar') setEstado('idle');
+    }
+  }
+
+  // Estado timer (volta ao idle)
+  if (jogador.estadoTimer > 0) {
+    jogador.estadoTimer--;
+    if (jogador.estadoTimer === 0 && jogador.estado !== 'pular') {
+      setEstado('idle');
+    }
+  }
+
+  // Movimento ao correr
+  if (jogador.estado === 'correr') {
+    jogador.x += VEL_CORRER * jogador.direcao;
+  }
+
+  // Invencibilidade pós-dano
+  if (jogador.invencivel) {
+    jogador.invecivelTimer--;
+    if (jogador.invecivelTimer <= 0) jogador.invencivel = false;
+  }
+
+  // Frame de animação
+  jogador.frameTimer++;
+  if (jogador.frameTimer > 8) {
+    jogador.frame = (jogador.frame + 1) % 4;
+    jogador.frameTimer = 0;
+  }
+
+  // Limites do mundo
+  jogador.x = Math.max(50, Math.min(2000, jogador.x));
+
+  // Câmera suave
+  cam.x += (jogador.x - W / 2 - cam.x) * 0.1;
+  cam.x = Math.max(0, Math.min(1200, cam.x));
+}
+
+function setEstado(estado, duracao = 0) {
+  jogador.estado      = estado;
+  jogador.estadoTimer = duracao;
+  if (estado === 'atacar') {
+    jogador.atacando    = true;
+    jogador.ataqueTimer = 30;
+  }
+  if (estado === 'pular' && jogador.noChao) {
+    jogador.vy     = FORCA_PULO;
+    jogador.noChao = false;
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  DESENHO DO JOGADOR
+// ════════════════════════════════════════════════════════
+function desenharJogador() {
+  const sx = jogador.x - cam.x;
+  const sy = jogador.y;
+  const d  = jogador.direcao;
+  const piscar = jogador.invencivel && Math.floor(Date.now() / 100) % 2 === 0;
+  if (piscar) return;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(d, 1);
+
+  const estado = jogador.estado;
+  const f      = jogador.frame;
+
+  // Sombra
+  ctx.save();
+  ctx.fillStyle = '#00000033';
+  ctx.beginPath();
+  ctx.ellipse(0, 2, 18, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Pernas
+  const legAnim = (estado === 'correr') ? Math.sin(f * Math.PI / 2) * 10 : 0;
+  ctx.fillStyle = '#2c3e8c';
+  // Perna esquerda
+  ctx.save();
+  ctx.translate(-8, -20);
+  ctx.rotate((legAnim * Math.PI) / 180);
+  ctx.fillRect(-4, 0, 8, 22);
+  ctx.restore();
+  // Perna direita
+  ctx.save();
+  ctx.translate(8, -20);
+  ctx.rotate((-legAnim * Math.PI) / 180);
+  ctx.fillRect(-4, 0, 8, 22);
+  ctx.restore();
+
+  // Botas
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(-14, -2, 10, 6);
+  ctx.fillRect(4,   -2, 10, 6);
+
+  // Corpo / armadura
+  ctx.fillStyle = '#3a5fc8';
+  ctx.fillRect(-12, -44, 24, 26);
+
+  // Detalhe armadura
+  ctx.fillStyle = '#2040a0';
+  ctx.fillRect(-12, -44, 24, 4);
+  ctx.fillRect(-12, -26, 24, 4);
+
+  // Emblema peito
+  ctx.fillStyle = '#e94560';
+  ctx.beginPath();
+  ctx.arc(0, -36, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Braço esquerdo
+  ctx.fillStyle = '#3a5fc8';
+  ctx.fillRect(-20, -44, 8, 20);
+
+  // Braço direito (com espada)
+  const ataqueRot = jogador.atacando ? -60 : 0;
+  ctx.save();
+  ctx.translate(12, -42);
+  ctx.rotate((ataqueRot * Math.PI) / 180);
+  ctx.fillStyle = '#3a5fc8';
+  ctx.fillRect(0, 0, 8, 20);
+
+  // ESPADA
+  ctx.fillStyle = '#c0c0c0';   // lâmina
+  ctx.fillRect(3, -30, 5, 32);
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillRect(3, -30, 5, 4);  // ponta
+  ctx.fillStyle = '#8B6914';   // guarda
+  ctx.fillRect(-2, 0, 15, 5);
+  ctx.fillStyle = '#5c3d0a';   // cabo
+  ctx.fillRect(4, 4, 4, 12);
+
+  // Brilho espada ao atacar
+  if (jogador.atacando) {
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#ffffffcc';
+    ctx.fillRect(3, -30, 5, 32);
+    ctx.restore();
+    criarParticulas(
+      jogador.x + d * 30,
+      jogador.y - 40,
+      '#ffe066', 2
+    );
+  }
+  ctx.restore();
+
+  // Cabeça
+  ctx.fillStyle = '#f5c89a';
+  ctx.beginPath();
+  ctx.arc(0, -54, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Capacete
+  ctx.fillStyle = '#2040a0';
+  ctx.beginPath();
+  ctx.arc(0, -57, 12, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(-12, -57, 24, 6);
+
+  // Olhos
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(3,  -56, 4, 4);
+
+  // Agachado
+  if (estado === 'agachar') {
+    ctx.save();
+    ctx.translate(0, 14);
+    ctx.scale(1, 0.6);
+    ctx.fillStyle = '#2c3e8c';
+    ctx.fillRect(-14, -44, 28, 26);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+// ════════════════════════════════════════════════════════
+//  INIMIGOS
+// ════════════════════════════════════════════════════════
+const INIMIGOS_CONFIG = [
+  { x: 600,  cor: '#c0392b', corEscuro: '#7b241c', respawn: 600 },
+  { x: 900,  cor: '#8e44ad', corEscuro: '#6c3483', respawn: 700 },
+  { x: 1200, cor: '#d35400', corEscuro: '#a04000', respawn: 800 },
+];
+
+const inimigos = INIMIGOS_CONFIG.map((cfg, i) => ({
+  id: i,
+  x: cfg.x, y: CHAO_Y,
+  w: 32, h: 50,
+  hp: 60, maxHp: 60,
+  vx: 0,
+  direcao: -1,
+  cor: cfg.cor,
+  corEscuro: cfg.corEscuro,
+  vivo: true,
+  respawnTimer: 0,
+  respawnOrigem: cfg.x,
+  frame: 0,
+  frameTimer: 0,
+  danoTimer: 0,
+}));
+
+function atualizarInimigos() {
+  inimigos.forEach(ini => {
+    if (!ini.vivo) {
+      ini.respawnTimer--;
+      if (ini.respawnTimer <= 0) {
+        ini.hp    = ini.maxHp;
+        ini.x     = ini.respawnOrigem;
+        ini.vivo  = true;
+      }
+      return;
+    }
+
+    // Move em direção ao jogador
+    const dx = jogador.x - ini.x;
+    ini.direcao = dx > 0 ? 1 : -1;
+    const dist  = Math.abs(dx);
+
+    if (dist > 50) {
+      ini.x += ini.direcao * 1.2;
+    }
+
+    // Dano ao jogador por contato
+    if (dist < 40 && Math.abs(jogador.y - ini.y) < 30 && !jogador.invencivel) {
+      jogador.hp             = Math.max(0, jogador.hp - 0.3);
+      jogador.invencivel     = true;
+      jogador.invecivelTimer = 40;
+    }
+
+    // Animação
+    ini.frameTimer++;
+    if (ini.frameTimer > 10) {
+      ini.frame = (ini.frame + 1) % 4;
+      ini.frameTimer = 0;
+    }
+
+    if (ini.danoTimer > 0) ini.danoTimer--;
+  });
+}
+
+function desenharInimigos() {
+  inimigos.forEach(ini => {
+    if (!ini.vivo) return;
+
+    const sx = ini.x - cam.x;
+    const sy = ini.y;
+    const d  = ini.direcao;
+    const piscar = ini.danoTimer > 0 && Math.floor(Date.now() / 60) % 2 === 0;
+
+    // Barra HP
+    const bw = 44, bh = 6;
+    const bx = sx - bw / 2, by = sy - ini.h - 14;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = ini.hp > ini.maxHp * 0.4 ? '#27ae60' : '#e74c3c';
+    ctx.fillRect(bx, by, bw * (ini.hp / ini.maxHp), bh);
+    ctx.strokeStyle = '#ffffff33';
+    ctx.strokeRect(bx, by, bw, bh);
+
+    if (piscar) return;
+
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.scale(d, 1);
+
+    // Sombra
+    ctx.fillStyle = '#00000033';
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 16, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pernas
+    const leg = Math.sin(ini.frame * Math.PI / 2) * 8;
+    ctx.fillStyle = ini.corEscuro;
+    ctx.save(); ctx.translate(-7, -18); ctx.rotate((leg * Math.PI) / 180);
+    ctx.fillRect(-4, 0, 8, 20); ctx.restore();
+    ctx.save(); ctx.translate(7,  -18); ctx.rotate((-leg * Math.PI) / 180);
+    ctx.fillRect(-4, 0, 8, 20); ctx.restore();
+
+    // Corpo
+    ctx.fillStyle = ini.cor;
+    ctx.fillRect(-11, -42, 22, 26);
+
+    // Detalhes corpo
+    ctx.fillStyle = ini.corEscuro;
+    ctx.fillRect(-11, -42, 22, 4);
+
+    // Braços
+    ctx.fillStyle = ini.cor;
+    ctx.fillRect(-18, -42, 7, 18);
+    ctx.fillRect(11,  -42, 7, 18);
+
+    // Cabeça
+    ctx.fillStyle = ini.cor;
+    ctx.beginPath();
+    ctx.arc(0, -52, 11, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Chifres (inimigo)
+    ctx.fillStyle = '#333';
+    ctx.beginPath();
+    ctx.moveTo(-8, -60); ctx.lineTo(-4, -70); ctx.lineTo(0, -60);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0, -60); ctx.lineTo(4, -70); ctx.lineTo(8, -60);
+    ctx.fill();
+
+    // Olhos brilhantes
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(-6, -56, 4, 4);
+    ctx.fillRect(2,  -56, 4, 4);
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(-5, -55, 2, 2);
+    ctx.fillRect(3,  -55, 2, 2);
+
+    ctx.restore();
+  });
+}
+
+function checarAtaqueInimigos() {
+  if (!jogador.atacando) return;
+  const alcance = 80;
+
+  inimigos.forEach(ini => {
+    if (!ini.vivo) return;
+    const dx = Math.abs(jogador.x - ini.x);
+    const dy = Math.abs(jogador.y - ini.y);
+    if (dx < alcance && dy < 40) {
+      const dano = 18 + Math.floor(Math.random() * 8);
+      ini.hp -= dano;
+      ini.danoTimer = 10;
+      criarParticulas(ini.x, ini.y - 30, '#e74c3c', 10);
+      mostrarDano(ini.x, ini.y - 60, dano);
+      if (ini.hp <= 0) {
+        ini.vivo         = false;
+        ini.respawnTimer = 300 + Math.random() * 200;
+        criarParticulas(ini.x, ini.y - 20, ini.cor, 20);
+      }
+    }
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  DANO FLUTUANTE
+// ════════════════════════════════════════════════════════
+const textosDano = [];
+
+function mostrarDano(x, y, val) {
+  textosDano.push({ x, y, val, vida: 1 });
+}
+
+function atualizarTextosDano() {
+  for (let i = textosDano.length - 1; i >= 0; i--) {
+    textosDano[i].y    -= 1.2;
+    textosDano[i].vida -= 0.025;
+    if (textosDano[i].vida <= 0) textosDano.splice(i, 1);
+  }
+}
+
+function desenharTextosDano() {
+  textosDano.forEach(t => {
+    ctx.save();
+    ctx.globalAlpha = t.vida;
+    ctx.fillStyle   = '#ffe066';
+    ctx.font        = 'bold 18px Courier New';
+    ctx.textAlign   = 'center';
+    ctx.fillText(`-${t.val}`, t.x - cam.x, t.y);
+    ctx.restore();
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  CENÁRIO
+// ════════════════════════════════════════════════════════
+function desenharCenario() {
+  // Céu gradiente
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0,   '#0a0a2e');
+  grad.addColorStop(0.6, '#1a1a4e');
+  grad.addColorStop(1,   '#2a1a3e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Estrelas
+  ctx.fillStyle = '#ffffff';
+  const stars = [
+    [100,30],[200,60],[350,20],[500,45],[650,15],[750,55],
+    [850,30],[120,80],[430,70],[580,40],[720,25],[80,50],
+  ];
+  stars.forEach(([sx, sy]) => {
+    const brilho = 0.4 + Math.sin(Date.now() / 1000 + sx) * 0.3;
+    ctx.globalAlpha = brilho;
+    ctx.fillRect(sx, sy, 2, 2);
+  });
+  ctx.globalAlpha = 1;
+
+  // Montanhas ao fundo (parallax leve)
+  const px = cam.x * 0.3;
+  ctx.fillStyle = '#1a1a3e';
+  [0, 200, 400, 600, 800, 1000].forEach(mx => {
+    ctx.beginPath();
+    ctx.moveTo(mx - px, CHAO_Y - 40);
+    ctx.lineTo(mx + 80 - px, CHAO_Y - 140);
+    ctx.lineTo(mx + 160 - px, CHAO_Y - 40);
+    ctx.fill();
+  });
+
+  // Chão
+  const gradChao = ctx.createLinearGradient(0, CHAO_Y, 0, H);
+  gradChao.addColorStop(0, '#2d1b4e');
+  gradChao.addColorStop(1, '#1a0a2e');
+  ctx.fillStyle = gradChao;
+  ctx.fillRect(0, CHAO_Y + 4, W, H - CHAO_Y);
+
+  // Linha do chão brilhante
+  ctx.strokeStyle = '#8e44ad66';
+  ctx.lineWidth   = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, CHAO_Y + 4);
+  ctx.lineTo(W, CHAO_Y + 4);
+  ctx.stroke();
+
+  // Detalhes no chão
+  ctx.fillStyle = '#3d2b5e';
+  for (let gx = -cam.x % 60; gx < W; gx += 60) {
+    ctx.fillRect(gx, CHAO_Y + 4, 30, 4);
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  HP DO JOGADOR
+// ════════════════════════════════════════════════════════
+function desenharHPJogador() {
+  const bw = 180, bh = 14;
+  const bx = 20, by = H - 40;
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(bx, by, bw, bh);
+
+  const pct  = jogador.hp / jogador.maxHp;
+  const cor  = pct > 0.5 ? '#27ae60' : pct > 0.25 ? '#f39c12' : '#e74c3c';
+  ctx.fillStyle = cor;
+  ctx.fillRect(bx, by, bw * pct, bh);
+
+  ctx.strokeStyle = '#ffffff44';
+  ctx.lineWidth   = 1;
+  ctx.strokeRect(bx, by, bw, bh);
+
+  ctx.fillStyle = '#fff';
+  ctx.font      = '11px Courier New';
+  ctx.fillText(`HP: ${Math.ceil(jogador.hp)} / ${jogador.maxHp}`, bx, by - 4);
+
+  if (jogador.hp <= 0) {
+    ctx.fillStyle = '#e94560cc';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.font      = 'bold 48px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', W / 2, H / 2);
+    ctx.font      = '20px Courier New';
+    ctx.fillText('Atualize a página para recomeçar', W / 2, H / 2 + 50);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  HUD COMANDO
+// ════════════════════════════════════════════════════════
+const EMOJIS = {
+  pular: '⬆️', atacar: '⚔️', correr: '🏃',
+  parar: '✋', agachar: '⬇️', direita: '↪️', esquerda: '↩️'
+};
+
+function atualizarHUD(cmd) {
+  const el = document.getElementById('cmd-display');
+  const em = EMOJIS[cmd] || '🎤';
+  el.textContent = `${em}  ${cmd.toUpperCase()}`;
+  el.style.color      = '#00ff99';
+  el.style.borderColor = '#00ff9966';
+  setTimeout(() => {
+    el.style.color      = '#e94560';
+    el.style.borderColor = '#e9456066';
+  }, 800);
+
+  // Histórico
+  const lista = document.getElementById('hist-lista');
+  const li    = document.createElement('li');
+  const hora  = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  li.textContent = `${hora} ${em} ${cmd}`;
+  lista.prepend(li);
+  while (lista.children.length > 6) lista.removeChild(lista.lastChild);
+}
+
+// ════════════════════════════════════════════════════════
+//  RECONHECIMENTO DE VOZ
+// ════════════════════════════════════════════════════════
+const COMANDOS_MAP = {
+  pular: ['pular', 'pula', 'pulou'],
+  atacar: ['atacar', 'ataca', 'atacou', 'ataque'],
+  correr: ['correr', 'corre', 'correu', 'correr'],
+  parar: ['parar', 'para', 'parou', 'stop'],
+  agachar: ['agachar', 'agacha', 'agachou', 'abaixar', 'abaixa'],
+  direita: ['direita', 'virar direita', 'vira direita', 'girar direita'],
+  esquerda: ['esquerda', 'virar esquerda', 'vira esquerda', 'girar esquerda'],
+};
+
+function detectarComando(texto) {
+  const t = texto.toLowerCase().trim();
+  for (const [cmd, variantes] of Object.entries(COMANDOS_MAP)) {
+    for (const v of variantes) {
+      if (t.includes(v)) return cmd;
+    }
+  }
+  return null;
+}
+
+function executarComando(cmd) {
+  if (jogador.hp <= 0) return;
+
+  atualizarHUD(cmd);
+
+  switch (cmd) {
+    case 'pular':
+      if (jogador.noChao) setEstado('pular');
+      break;
+    case 'atacar':
+      setEstado('atacar', 30);
+      checarAtaqueInimigos();
+      break;
+    case 'correr':
+      setEstado('correr', 80);
+      break;
+    case 'parar':
+      setEstado('idle');
+      break;
+    case 'agachar':
+      setEstado('agachar', 60);
+      break;
+    case 'direita':
+      jogador.direcao = 1;
+      setEstado('idle', 20);
+      criarParticulas(jogador.x, jogador.y, '#3a5fc8', 5);
+      break;
+    case 'esquerda':
+      jogador.direcao = -1;
+      setEstado('idle', 20);
+      criarParticulas(jogador.x, jogador.y, '#3a5fc8', 5);
+      break;
+  }
+}
+
+function iniciarReconhecimento() {
+  const statusEl = document.getElementById('mic-status');
+
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    statusEl.textContent = '❌ Reconhecimento de voz não suportado (use Chrome ou Edge)';
+    statusEl.style.color = '#e74c3c';
+    return;
+  }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new SR();
+  rec.lang       = 'pt-BR';
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.maxAlternatives = 3;
+
+  rec.onstart = () => {
+    statusEl.textContent = '🎤 Microfone ativo — fale um comando!';
+    statusEl.style.color = '#27ae60';
+    document.getElementById('btn-mic').textContent = '✅ Mic ativo';
+    document.getElementById('btn-mic').style.background = '#27ae60';
+  };
+
+  rec.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const textoOuvido = e.results[i][0].transcript;
+      const debugEl = document.getElementById('debug-texto');
+      if (debugEl) debugEl.textContent = `"${textoOuvido}"`;
+
+      if (e.results[i].isFinal) {
+        for (let a = 0; a < e.results[i].length; a++) {
+          const texto = e.results[i][a].transcript;
+          const cmd   = detectarComando(texto);
+          if (cmd) { executarComando(cmd); break; }
+        }
+      }
+    }
+  };
+
+  rec.onerror = (e) => {
+    console.error('Erro mic:', e.error);
+    if (e.error === 'not-allowed') {
+      statusEl.textContent = '❌ Permissão negada — clique em Ativar Microfone';
+      statusEl.style.color = '#e74c3c';
+    } else if (e.error === 'network') {
+      statusEl.textContent = '❌ Erro de rede — verifique a conexão';
+      statusEl.style.color = '#e74c3c';
+    } else {
+      statusEl.textContent = `⚠️ Erro: ${e.error}`;
+      statusEl.style.color = '#f39c12';
+    }
+    document.getElementById('btn-mic').textContent = '🎤 Ativar Microfone';
+    document.getElementById('btn-mic').style.background = '#e94560';
+  };
+
+  rec.onend = () => {
+    statusEl.textContent = '🔄 Reconectando microfone...';
+    statusEl.style.color = '#f39c12';
+    setTimeout(() => { try { rec.start(); } catch(err) {} }, 500);
+  };
+
+  try {
+    rec.start();
+  } catch(err) {
+    statusEl.textContent = '⚠️ Clique em "Ativar Microfone" para começar';
+    statusEl.style.color = '#f39c12';
+  }
+
+  window._rec = rec;
+}
+
+function tentarIniciarMic() {
+  if (window._rec) {
+    try { window._rec.stop(); } catch(e) {}
+    window._rec = null;
+  }
+  iniciarReconhecimento();
+}
+
+// ════════════════════════════════════════════════════════
+//  LOOP PRINCIPAL
+// ════════════════════════════════════════════════════════
+function loop() {
+  ctx.clearRect(0, 0, W, H);
+
+  desenharCenario();
+  atualizarInimigos();
+  desenharInimigos();
+  atualizarJogador();
+  desenharJogador();
+  atualizarParticulas();
+  desenharParticulas();
+  atualizarTextosDano();
+  desenharTextosDano();
+  desenharHPJogador();
+
+  requestAnimationFrame(loop);
+}
+
+// ════════════════════════════════════════════════════════
+//  INICIAR
+// ════════════════════════════════════════════════════════
+iniciarReconhecimento();
+loop();
+</script>
+</body>
+</html>

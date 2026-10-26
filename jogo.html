@@ -242,7 +242,7 @@ function atualizarJogador() {
   // Estado timer (volta ao idle)
   if (jogador.estadoTimer > 0) {
     jogador.estadoTimer--;
-    if (jogador.estadoTimer === 0 && jogador.estado !== 'pular') {
+    if (jogador.estadoTimer === 0 && jogador.estado !== 'pular' && jogador.estado !== 'correr') {
       setEstado('idle');
     }
   }
@@ -769,7 +769,7 @@ function executarComando(cmd) {
       checarAtaqueInimigos();
       break;
     case 'correr':
-      setEstado('correr', 80);
+      setEstado('correr', 0);
       break;
     case 'parar':
       setEstado('idle');
